@@ -20,12 +20,6 @@ venv/
 .env.*
 !.env.example
 
-# Uploaded files & processed data
-backend/uploads/
-backend/processed_data/
-
-# Trained models
-backend/models/
 
 # Output logs
 backend/output.txt
