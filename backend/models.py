@@ -40,8 +40,9 @@ class SiteData(Base):
     data_id = Column(Integer, primary_key=True, index=True)
     site_id = Column(Integer, ForeignKey("site.site_id"), nullable=False)
 
-    # 🔥 關鍵修正在這裡
-    the_date = Column(Date, nullable=False)    # ✅ 一定要 Date
+    upload_id = Column(Integer, nullable=False, index=True)   # ⭐ 新增
+
+    the_date = Column(Date, nullable=False)
     the_hour = Column(Integer, nullable=False)
 
     gi = Column(Float, nullable=True)

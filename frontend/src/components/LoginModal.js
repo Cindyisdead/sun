@@ -33,7 +33,6 @@ export default function LoginModal({
       localStorage.setItem("user", JSON.stringify(data));
       localStorage.setItem("user_id", data.user_id);
 
-      alert("登入成功！");
       onLoginSuccess?.(data);
       onClose?.();
 
@@ -82,11 +81,16 @@ export default function LoginModal({
             登出
           </button>
         ) : (
-          <form className="flex flex-col gap-4" onSubmit={login}>
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={login}
+            autoComplete="off"
+          >
             <div>
               <label className="text-white/80 text-sm">帳號</label>
               <input
                 type="text"
+                autoComplete="off"
                 className="w-full rounded-lg bg-white/10 px-4 py-3 text-white"
                 required
                 value={account}
@@ -99,6 +103,7 @@ export default function LoginModal({
               <label className="text-white/80 text-sm">密碼</label>
               <input
                 type="password"
+                autoComplete="new-password"
                 className="w-full rounded-lg bg-white/10 px-4 py-3 text-white"
                 required
                 value={password}

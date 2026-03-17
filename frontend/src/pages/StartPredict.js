@@ -159,7 +159,7 @@ export default function StartPredict({
         return;
       }
 
-      if (!json.data_id) {
+      if (!json.upload_id) {
         setFileError("上傳失敗，請確認檔案內容");
         return;
       }
@@ -173,7 +173,8 @@ export default function StartPredict({
 
       // 🔥 存 localStorage
     localStorage.setItem("lastUploadedFile", json.file_name);
-    localStorage.setItem("lastDataId", json.data_id);
+    localStorage.setItem("lastDataId", json.upload_id);
+    localStorage.removeItem("afterDataId");
     localStorage.setItem("lastFeatures", JSON.stringify(json.features || []));
     localStorage.setItem(
       "lastOriginalFeatures",

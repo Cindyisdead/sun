@@ -51,6 +51,15 @@ const OverallStatus = ({ avgError }) => {
 export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, onNavigateToSites, onNavigateToTrain, onNavigateToPredict, onNavigateToModelMgmt }) {
   const [file, setFile] = useState(null);
   const [selectedModelId, setSelectedModelId] = useState('');
+
+  useEffect(() => {
+    const modelId = localStorage.getItem("predict_model_id");
+    if (modelId) {
+      setSelectedModelId(modelId);
+      localStorage.removeItem("predict_model_id");
+    }
+  }, []);
+
   const [trainedModels, setTrainedModels] = useState([]);
   const [isPredicting, setIsPredicting] = useState(false);
   const [result, setResult] = useState(null);
@@ -61,15 +70,17 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
   const [page, setPage] = useState(0);
 
   // Fetch trained models on mount
- useEffect(() => {
-  const userId = localStorage.getItem('user_id');
+  useEffect(() => {
+    const user = JSON.parse(localStorage.getItem("user"));
 
-  if (!userId) {
-    setError('找不到登入資訊，請重新登入');
-    return;
-  }
+    if (!user || !user.user_id) {
+      setError("找不到登入資訊，請重新登入");
+      return;
+    }
 
-  fetch(`http://127.0.0.1:8000/train/trained-models?user_id=${userId}`)
+    const userId = user.user_id;
+
+    fetch(`http://127.0.0.1:8000/train/trained-models?user_id=${userId}`)
     .then(async (r) => {
       const data = await r.json().catch(() => []);
       if (!r.ok) {

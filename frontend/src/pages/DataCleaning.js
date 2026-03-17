@@ -22,7 +22,7 @@ function HistogramSVG({ bins = [], counts = [], height = 160 }) {
   const width = 220;
   const xMin = Math.min(...bins);
   const xMax = Math.max(...bins);
-  const yMax = Math.max(...counts);
+  const yMax = Math.max(...counts, 1);
 
   const mapX = (x) => ((x - xMin) / (xMax - xMin)) * width;
   const mapY = (c) => height - (c / yMax) * (height - 8);
@@ -52,7 +52,7 @@ function HistogramSVG({ bins = [], counts = [], height = 160 }) {
             x={x}
             y={mapY(c)}
             width={w}
-            height={height - mapY(c) - 4}
+            height={Math.max(0, height - mapY(c) - 4)}
             fill="#60a5fa"
             opacity="0.85"
           />
@@ -575,7 +575,7 @@ export default function DataCleaning({
       const data = await res.json();
 
       if (data.after_id) {
-        localStorage.setItem("lastDataId", data.after_id);
+        localStorage.setItem("afterDataId", data.after_id)
       }
 
       setResult({
@@ -752,13 +752,6 @@ export default function DataCleaning({
 
       <main className="container mx-auto px-6 py-8 max-w-7xl">
         <h1 className="text-3xl font-bold mb-8 text-white">資料清理與視覺化</h1>
-
-        <div className="mb-4 text-sm text-white/60">
-          目前檔案：{fileName || "未取得"}
-          <span className="mx-2">|</span>
-          Site ID：{siteId || "未取得"}
-        </div>
-
         <div className="flex flex-col gap-6 mb-8">
           <div className="flex gap-8 border-b border-white/10 pb-4 justify">
             {tabs.map((tab) => (
@@ -885,7 +878,16 @@ export default function DataCleaning({
             </button>
 
             <button
-              onClick={onNext}
+              onClick={() => {
+                const dataId = localStorage.getItem("lastDataId");
+
+                if (!dataId) {
+                  alert("沒有可訓練的資料，請先清理或重新上傳資料");
+                  return;
+                }
+
+                onNext();
+              }}
               className="rounded-lg border border-blue-400 px-6 py-2 text-sm font-bold text-blue-400 hover:bg-blue-400/10"
             >
               跳過清理 → 模型訓練

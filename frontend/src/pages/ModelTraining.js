@@ -125,17 +125,19 @@ export default function ModelTraining({ onBack, onNext, onNavigateToDashboard, o
 
   // 載入目前清洗檔案資訊
   React.useEffect(() => {
-    const dataId = localStorage.getItem('lastDataId');
-    if (!dataId) return;
-    fetch(`http://127.0.0.1:8000/train/info?data_id=${dataId}`)
-      .then(r => r.json())
-      .then(j => { if (j && j.cleaned_file) setCleanedFileName(j.cleaned_file); })
-      .catch(() => { });
+    const dataId =
+      localStorage.getItem('afterDataId') ||
+      localStorage.getItem('lastDataId');
+    if (dataId) {
+      setCleanedFileName(`Data ID: ${dataId}`);
+    }
   }, []);
 
   const handleStartTraining = async () => {
     if (selectedModels.length === 0) return alert('請選擇模型');
-    const dataId = localStorage.getItem('lastDataId');
+    const dataId =
+      localStorage.getItem('afterDataId') ||
+      localStorage.getItem('lastDataId');
     if (!dataId) return alert('找不到清洗後的資料來源');
 
     const params = {};

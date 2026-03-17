@@ -12,6 +12,7 @@ export default function ModelManagement({
 }) {
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deleteId, setDeleteId] = useState(null);
 
   const navProps = {
     onNavigateToDashboard,
@@ -30,7 +31,9 @@ export default function ModelManagement({
     try {
       setLoading(true);
 
-      const userId = localStorage.getItem('user_id');
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const userId = user.user_id;
+
       if (!userId) {
         throw new Error('找不到登入資訊，請重新登入');
       }
@@ -87,17 +90,13 @@ export default function ModelManagement({
   };
 
   const handleDelete = async (id) => {
-    const confirmed = window.confirm(`確定要刪除模型 ${id} 嗎？`);
-    if (!confirmed) return;
+    if (!deleteId) return;
 
     try {
-      const userId = localStorage.getItem('user_id');
-      if (!userId) {
-        throw new Error('找不到登入資訊，請重新登入');
-      }
-
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      const userId = user.user_id;
       const res = await fetch(
-        `http://127.0.0.1:8000/train/trained-models/${id}?user_id=${userId}`,
+        `http://127.0.0.1:8000/train/trained-models/${deleteId}?user_id=${userId}`,
         {
           method: 'DELETE',
         }
@@ -109,8 +108,9 @@ export default function ModelManagement({
         throw new Error(data.detail || '刪除模型失敗');
       }
 
-      setModels((prev) => prev.filter((m) => m.id !== id));
-      alert(`模型 ${id} 已成功刪除`);
+      setModels((prev) => prev.filter((m) => m.id !== deleteId));
+      setDeleteId(null);
+
     } catch (error) {
       console.error('刪除模型失敗:', error);
       alert(error.message || '刪除模型失敗');
@@ -188,14 +188,18 @@ export default function ModelManagement({
                     <div className="flex gap-2 border-l border-white/10 pl-6">
                       <button
                         title="查看詳情"
+                        onClick={() => {
+                          localStorage.setItem("predict_model_id", model.id);
+                          onNavigateToPredict();
+                        }}
                         className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-white/50 hover:text-white transition-all"
                       >
                         <span className="material-symbols-outlined">visibility</span>
                       </button>
 
                       <button
-                        onClick={() => handleDelete(model.id)}
                         title="刪除模型"
+                        onClick={() => setDeleteId(model.id)}
                         className="p-2.5 rounded-xl bg-red-500/5 hover:bg-red-500/20 text-white/30 hover:text-red-400 transition-all"
                       >
                         <span className="material-symbols-outlined">delete</span>
@@ -212,6 +216,33 @@ export default function ModelManagement({
           </div>
         )}
       </main>
+
+      {/* 刪除確認 Modal */}
+      {deleteId && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+          <div className="bg-background-dark border border-white/10 p-6 rounded-xl w-80">
+            <h3 className="text-lg font-bold mb-4">
+              確定要刪除模型 {deleteId} 嗎？
+            </h3>
+
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteId(null)}
+                className="px-4 py-2 bg-white/10 rounded-lg"
+              >
+                取消
+              </button>
+
+              <button
+                onClick={handleDelete}
+                className="px-4 py-2 bg-red-500 rounded-lg"
+              >
+                刪除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <footer className="p-8 text-center text-white/10 text-[10px] font-bold uppercase tracking-[0.4em]">
         © 2025 SUNERGY ANALYTICS CENTER

@@ -7,7 +7,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 
 from database import get_db
-from models import AfterData, TrainedModel, Site
+from models import AfterData, TrainedModel, Site, SiteData
 from schemas import TrainRequest, PredictRequest
 
 TW_TIMEZONE = timezone(timedelta(hours=8))
@@ -595,10 +595,38 @@ def _validate_clean_data(df: pd.DataFrame, gi_col: str, tm_col: str, target_col:
 def run_training(payload: TrainRequest, db: Session = Depends(get_db)):
     """payload.data_id = after_data.after_id"""
     entry = db.query(AfterData).filter(AfterData.after_id == payload.data_id).first()
-    if not entry:
-        raise HTTPException(status_code=404, detail="after_id not found, 請先執行資料清洗")
 
-    df = _load_cleaned_csv(entry)
+    data_source = "cleaned"
+    cleaned_path = None
+    site_id = None
+
+    # 有清洗資料
+    if entry:
+        df = _load_cleaned_csv(entry)
+        cleaned_path = entry.file_path
+        site_id = entry.site_id
+
+    # 沒有清洗資料 → 從 site_data
+    else:
+        rows = (
+            db.query(SiteData)
+            .filter(SiteData.upload_id == payload.data_id)
+            .all()
+        )
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="找不到原始資料")
+
+        data_source = "raw"
+        site_id = rows[0].site_id
+
+        df = pd.DataFrame([{
+            "GI": float(r.gi),
+            "TM": float(r.tm),
+            "EAC": float(r.eac),
+            "the_date": r.the_date,
+            "the_hour": r.the_hour
+        } for r in rows])
     target_col = payload.target or 'EAC'
     if target_col not in df.columns:
         raise HTTPException(status_code=400, detail=f"target column '{payload.target}' not found")
@@ -677,8 +705,6 @@ def run_training(payload: TrainRequest, db: Session = Depends(get_db)):
         except Exception as e:
             results[m] = {"id": m, "status": "error", "error": str(e)}
 
-    # attach metadata for which file used
-    cleaned_path = entry.file_path
 
     # Optional artifact saving (do not require sklearn globally, as XGBoost can save without it)
     if payload.save_model:
@@ -833,13 +859,13 @@ def run_training(payload: TrainRequest, db: Session = Depends(get_db)):
                     save_errors.append(f"save_failed:{mid}")
                 continue
         # insert trained models into a dedicated table for querying
-        if getattr(entry, "site_id", None) is None:
-            raise HTTPException(status_code=400, detail="after_data 的 site_id 為空，無法建立 trained_model")
+        if site_id is None:
+            raise HTTPException(status_code=400, detail="site_id 為空，無法建立 trained_model")
 
         for art in saved:
             try:
                 tm = TrainedModel(
-                    site_id=entry.site_id,
+                    site_id=site_id,
                     data_id=payload.data_id,
                     model_type=art.get('model_id'),
                     parameters=results.get(art.get('model_id'), {}).get('best_params', {}),
@@ -867,6 +893,7 @@ def run_training(payload: TrainRequest, db: Session = Depends(get_db)):
 
     return _to_native({
         "data_id": payload.data_id,
+        "data_source": data_source,
         "cleaned_file": cleaned_path,
         "split": {
             "train": float(payload.split_ratio),

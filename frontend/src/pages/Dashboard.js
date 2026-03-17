@@ -76,10 +76,13 @@ export default function Dashboard({
         setLoadingModels(true);
         setModelError('');
 
-        const userId = localStorage.getItem('user_id');
-        if (!userId) {
-          throw new Error('找不到登入資訊，請重新登入');
+        const user = JSON.parse(localStorage.getItem("user"));
+
+        if (!user || !user.user_id) {
+          throw new Error("找不到登入資訊，請重新登入");
         }
+
+        const userId = user.user_id;
 
         const res = await fetch(
           `http://127.0.0.1:8000/train/trained-models?user_id=${userId}`

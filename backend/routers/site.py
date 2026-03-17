@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from io import BytesIO
 import pandas as pd
 import re
+import time
 
 from database import get_db
 from models import Site, SiteData, User
@@ -171,6 +172,8 @@ async def upload_site_data(
         }
     )
 
+    upload_id = int(time.time())
+    
     # 5️⃣ 日期轉換
     try:
         df["the_date"] = pd.to_datetime(df["the_date"], errors="raise").dt.date
@@ -212,6 +215,7 @@ async def upload_site_data(
 
         entry = SiteData(
             site_id=site_id,
+            upload_id=upload_id,
             the_date=row["the_date"],
             the_hour=hour,
             gi=float(row["gi"]),
@@ -234,6 +238,7 @@ async def upload_site_data(
         "rows": len(entries),
         "site_id": site_id,
         "data_id": entries[0].data_id,
+        "upload_id": upload_id,
         "file_name": file.filename,
 
         # ✅ 原始欄位（你要顯示的）
