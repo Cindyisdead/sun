@@ -315,3 +315,246 @@ async def predict_file(
         "columns": display_cols + ["predicted_EAC", "error_pct"],
         "rows": rows_out,
     })
+
+
+# ───────────────────────────────────────
+# 內部工具：對單一模型做預測，回傳 y_pred array
+# ───────────────────────────────────────
+def _predict_with_model(artifact_path: Path, meta: dict, X: np.ndarray):
+    """Load model from artifact_path and return y_pred numpy array."""
+    if artifact_path.suffix == ".json":
+        if not HAS_XGBOOST:
+            raise HTTPException(status_code=500, detail="xgboost not available")
+        booster = xgb.XGBRegressor()
+        booster.load_model(str(artifact_path))
+        return booster.predict(X)
+
+    elif artifact_path.suffix == ".pt":
+        if not HAS_TORCH:
+            raise HTTPException(status_code=500, detail="PyTorch not available")
+        checkpoint = torch.load(str(artifact_path), map_location="cpu")
+        input_size = checkpoint["input_size"]
+        hidden_size = checkpoint["hidden_size"]
+        num_layers = checkpoint["num_layers"]
+        dropout = checkpoint["dropout"]
+        lookback = checkpoint["lookback"]
+        scaler_mean = np.array(checkpoint["scaler_mean"])
+        scaler_std = np.array(checkpoint["scaler_std"])
+
+        class LSTMRegressor(nn.Module):
+            def __init__(self, input_size, hidden_size, num_layers, dropout):
+                super().__init__()
+                self.lstm = nn.LSTM(input_size, hidden_size, num_layers=num_layers,
+                                   batch_first=True, dropout=dropout if num_layers > 1 else 0.0)
+                self.fc = nn.Linear(hidden_size, 1)
+            def forward(self, x):
+                out, _ = self.lstm(x)
+                return self.fc(out[:, -1, :]).squeeze(-1)
+
+        model = LSTMRegressor(input_size, hidden_size, num_layers, dropout)
+        model.load_state_dict(checkpoint["model_state_dict"])
+        model.eval()
+        X_scaled = ((X - scaler_mean) / scaler_std).astype(np.float32)
+        if len(X_scaled) <= lookback:
+            raise HTTPException(status_code=400, detail=f"Not enough rows for LSTM (need > {lookback})")
+        X_seq = np.array([X_scaled[i - lookback:i] for i in range(lookback, len(X_scaled))],
+                         dtype=np.float32)
+        with torch.no_grad():
+            preds = model(torch.from_numpy(X_seq)).numpy()
+        y_pred = np.full(len(X), np.nan)
+        y_pred[lookback:] = preds
+        return y_pred
+
+    else:
+        import joblib as _joblib
+        model = _joblib.load(artifact_path)
+        return model.predict(X)
+
+
+# ───────────────────────────────────────
+# POST /train/predict-file-multi  — 多模型比對預測
+# ───────────────────────────────────────
+@router.post("/predict-file-multi")
+async def predict_file_multi(
+    file: UploadFile = File(...),
+    model_ids: str = Form(...),          # 逗號分隔的 model_id，例如 "1,5,12"
+    db: Session = Depends(get_db),
+):
+    # 1. 解析 model_ids
+    try:
+        id_list = [int(x.strip()) for x in model_ids.split(",") if x.strip()]
+    except ValueError:
+        raise HTTPException(status_code=400, detail="model_ids 格式錯誤，請用逗號分隔整數")
+    if not id_list:
+        raise HTTPException(status_code=400, detail="至少需要選擇一個模型")
+
+    # 2. 查詢所有模型紀錄
+    models = []
+    for mid in id_list:
+        tm = db.query(TrainedModel).filter(TrainedModel.model_id == mid).first()
+        if not tm:
+            raise HTTPException(status_code=404, detail=f"找不到模型 ID={mid}")
+        base_dir = Path(__file__).resolve().parent.parent
+        artifact_path = base_dir / tm.file_path
+        if not artifact_path.exists():
+            raise HTTPException(status_code=404, detail=f"模型檔案不存在: model_id={mid}")
+        meta_path = artifact_path.with_suffix(".meta.json")
+        if not meta_path.exists():
+            raise HTTPException(status_code=400, detail=f"模型 {mid} 缺少 .meta.json")
+        import json as _json
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            meta = _json.load(fh)
+        models.append({"tm": tm, "artifact_path": artifact_path, "meta": meta})
+
+    # 3. 讀取上傳檔案
+    import io
+    contents = await file.read()
+    fname = file.filename or ""
+
+    if fname.lower().endswith(".xlsx") or fname.lower().endswith(".xls"):
+        try:
+            import openpyxl  # noqa: F401
+            df = pd.read_excel(io.BytesIO(contents))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Excel 讀取失敗: {e}")
+    else:
+        try:
+            df = pd.read_csv(io.BytesIO(contents))
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"CSV 讀取失敗: {e}")
+
+    if df.empty:
+        raise HTTPException(status_code=400, detail="上傳的檔案沒有資料")
+
+    # 4. derive time features
+    time_col = None
+    for c in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[c]):
+            time_col = c
+            break
+        if df[c].dtype == object:
+            parsed = pd.to_datetime(df[c], errors="coerce")
+            if parsed.notna().sum() > len(df) * 0.5:
+                time_col = c
+                break
+    df = _ensure_time_features(df, time_col)
+
+    # alias mapping
+    alias_map = {
+        'hour': ['theHour', 'TheHour', 'THEHOUR', 'Hour'],
+        'month': ['theDate', 'TheDate', 'THEDATE'],
+    }
+
+    # 5. 對每個模型做預測
+    _hide = {'hour', 'dayofweek', 'month', 'hour_sin', 'hour_cos'}
+    display_cols = [c for c in df.columns if c not in _hide]
+
+    models_summary = []
+    pred_columns = []     # 新增欄位名稱（依序）
+    all_predictions = {}  # col_name -> list of values
+
+    for m_info in models:
+        tm = m_info["tm"]
+        artifact_path = m_info["artifact_path"]
+        meta = m_info["meta"]
+        feature_cols = meta.get("feature_cols_used") or []
+        target_col = meta.get("target") or "EAC"
+
+        # apply alias mapping for this model's features
+        df_copy = df.copy()
+        for feat, aliases in alias_map.items():
+            if feat in feature_cols and feat not in df_copy.columns:
+                for alias in aliases:
+                    if alias in df_copy.columns:
+                        if feat == 'month':
+                            parsed = pd.to_datetime(df_copy[alias], errors='coerce')
+                            df_copy['month'] = parsed.dt.month
+                        else:
+                            df_copy[feat] = pd.to_numeric(df_copy[alias], errors='coerce')
+                        break
+
+        missing = [c for c in feature_cols if c not in df_copy.columns]
+        if missing:
+            models_summary.append({
+                "model_id": tm.model_id,
+                "model_type": tm.model_type,
+                "status": "error",
+                "error": f"缺少欄位: {', '.join(missing)}",
+                "total_predicted_eac": None,
+                "avg_error_pct": None,
+            })
+            continue
+
+        X = df_copy[feature_cols].apply(pd.to_numeric, errors="coerce").fillna(0).values
+
+        # predict
+        try:
+            y_pred = _predict_with_model(artifact_path, meta, X)
+        except Exception as e:
+            models_summary.append({
+                "model_id": tm.model_id,
+                "model_type": tm.model_type,
+                "status": "error",
+                "error": str(e),
+                "total_predicted_eac": None,
+                "avg_error_pct": None,
+            })
+            continue
+
+        # column names for this model
+        pred_col = f"pred_{tm.model_type}_{tm.model_id}"
+        err_col = f"err_{tm.model_type}_{tm.model_id}"
+        pred_columns.extend([pred_col, err_col])
+
+        # compute per-row predicted + error
+        actual_eac = df_copy[target_col].values if target_col in df_copy.columns else None
+        pred_vals = []
+        err_vals = []
+        for i in range(len(y_pred)):
+            pv = None if (isinstance(y_pred[i], float) and np.isnan(y_pred[i])) else round(float(y_pred[i]), 4)
+            pred_vals.append(pv)
+
+            ep = None
+            if actual_eac is not None and pv is not None:
+                act = float(actual_eac[i]) if not pd.isna(actual_eac[i]) else None
+                if act is not None and act != 0:
+                    ep = round(abs(pv - act) / abs(act) * 100, 2)
+                elif act == 0 and pv == 0:
+                    ep = 0.0
+            err_vals.append(ep)
+
+        all_predictions[pred_col] = pred_vals
+        all_predictions[err_col] = err_vals
+
+        # summary
+        valid_errors = [e for e in err_vals if e is not None]
+        valid_preds = [p for p in pred_vals if p is not None]
+        models_summary.append({
+            "model_id": tm.model_id,
+            "model_type": tm.model_type,
+            "status": "ok",
+            "total_predicted_eac": round(sum(valid_preds), 2) if valid_preds else None,
+            "avg_error_pct": round(sum(valid_errors) / len(valid_errors), 2) if valid_errors else None,
+        })
+
+    # 6. 組合 rows_out
+    rows_out = []
+    for i, row in df.iterrows():
+        r = {}
+        for col in display_cols:
+            val = row[col]
+            if isinstance(val, float) and np.isnan(val):
+                r[col] = None
+            else:
+                r[col] = val
+        # append each model's prediction columns
+        for pc in pred_columns:
+            r[pc] = all_predictions[pc][i] if i < len(all_predictions.get(pc, [])) else None
+        rows_out.append(r)
+
+    return _to_native({
+        "models_summary": models_summary,
+        "total_rows": len(rows_out),
+        "columns": display_cols + pred_columns,
+        "rows": rows_out,
+    })

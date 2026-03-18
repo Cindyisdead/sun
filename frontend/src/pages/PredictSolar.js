@@ -27,7 +27,7 @@ const ErrorLight = ({ pct }) => {
 };
 
 /* ── 整體診斷燈號 ── */
-const OverallStatus = ({ avgError }) => {
+const OverallStatus = ({ avgError, label }) => {
   if (avgError === null || avgError === undefined) return null;
   const v = Number(avgError);
   let cfg = { color: 'text-green-400', bg: 'bg-green-500', shadow: 'shadow-[0_0_15px_rgba(34,197,94,0.4)]', label: '發電正常', desc: '預測與實際高度吻合' };
@@ -35,27 +35,37 @@ const OverallStatus = ({ avgError }) => {
   else if (v > 5) cfg = { color: 'text-yellow-400', bg: 'bg-yellow-500', shadow: 'shadow-[0_0_15px_rgba(234,179,8,0.4)]', label: '需留意', desc: '環境干擾或輕微積塵' };
 
   return (
-    <div className="bg-white/5 border border-white/10 p-5 rounded-2xl flex items-center gap-4">
+    <div className="flex items-center gap-3">
       <div className="relative flex items-center justify-center">
-        <div className={`size-10 rounded-full ${cfg.bg} ${cfg.shadow} animate-pulse`} />
+        <div className={`size-8 rounded-full ${cfg.bg} ${cfg.shadow} animate-pulse`} />
       </div>
       <div className="flex flex-col">
-        <p className="text-[10px] text-white/40 uppercase font-bold tracking-widest mb-0.5">系統診斷狀態</p>
-        <span className={`text-lg font-black ${cfg.color}`}>{cfg.label}</span>
-        <span className="text-[10px] text-white/30 italic">{cfg.desc}</span>
+        {label && <p className="text-[9px] text-white/30 font-bold uppercase tracking-widest">{label}</p>}
+        <span className={`text-sm font-black ${cfg.color}`}>{cfg.label}</span>
+        <span className="text-[9px] text-white/30 italic">{cfg.desc}</span>
       </div>
     </div>
   );
 };
 
+/* ── 模型顏色表 ── */
+const MODEL_COLORS = [
+  { text: 'text-primary',    bg: 'bg-primary/15',    border: 'border-primary/30',    dot: 'bg-primary' },
+  { text: 'text-cyan-400',   bg: 'bg-cyan-400/15',   border: 'border-cyan-400/30',   dot: 'bg-cyan-400' },
+  { text: 'text-violet-400', bg: 'bg-violet-400/15', border: 'border-violet-400/30', dot: 'bg-violet-400' },
+  { text: 'text-rose-400',   bg: 'bg-rose-400/15',   border: 'border-rose-400/30',   dot: 'bg-rose-400' },
+  { text: 'text-emerald-400',bg: 'bg-emerald-400/15',border: 'border-emerald-400/30',dot: 'bg-emerald-400' },
+  { text: 'text-orange-400', bg: 'bg-orange-400/15', border: 'border-orange-400/30', dot: 'bg-orange-400' },
+];
+
 export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, onNavigateToSites, onNavigateToTrain, onNavigateToPredict, onNavigateToModelMgmt }) {
   const [file, setFile] = useState(null);
-  const [selectedModelId, setSelectedModelId] = useState('');
+  const [selectedModelIds, setSelectedModelIds] = useState([]);
 
   useEffect(() => {
     const modelId = localStorage.getItem("predict_model_id");
     if (modelId) {
-      setSelectedModelId(modelId);
+      setSelectedModelIds([modelId]);
       localStorage.removeItem("predict_model_id");
     }
   }, []);
@@ -72,47 +82,72 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
   // Fetch trained models on mount
   useEffect(() => {
     const user = JSON.parse(localStorage.getItem("user"));
-
     if (!user || !user.user_id) {
       setError("找不到登入資訊，請重新登入");
       return;
     }
-
     const userId = user.user_id;
-
     fetch(`http://127.0.0.1:8000/train/trained-models?user_id=${userId}`)
-    .then(async (r) => {
-      const data = await r.json().catch(() => []);
-      if (!r.ok) {
-        throw new Error(data?.detail || '取得模型失敗');
-      }
-      return data;
-    })
-    .then((data) => {
-      if (Array.isArray(data)) setTrainedModels(data);
-    })
-    .catch((e) => {
-      setError(e.message || '取得模型失敗');
-    });
-}, []);
+      .then(async (r) => {
+        const data = await r.json().catch(() => []);
+        if (!r.ok) throw new Error(data?.detail || '取得模型失敗');
+        return data;
+      })
+      .then((data) => {
+        if (Array.isArray(data)) setTrainedModels(data);
+      })
+      .catch((e) => setError(e.message || '取得模型失敗'));
+  }, []);
+
+  const toggleModel = (modelId) => {
+    const id = String(modelId);
+    setSelectedModelIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
 
   const handlePredict = async () => {
-    if (!file || !selectedModelId) return alert('請上傳資料並選擇模型');
+    if (!file || selectedModelIds.length === 0) return alert('請上傳資料並選擇至少一個模型');
     setIsPredicting(true);
     setError('');
     setResult(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('model_id', selectedModelId);
 
-      const res = await fetch('http://127.0.0.1:8000/train/predict-file', {
-        method: 'POST',
-        body: formData,
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json?.detail || '預測失敗');
-      setResult(json);
+      // 單模型走原本 API，多模型走新 API
+      if (selectedModelIds.length === 1) {
+        formData.append('model_id', selectedModelIds[0]);
+        const res = await fetch('http://127.0.0.1:8000/train/predict-file', {
+          method: 'POST',
+          body: formData,
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.detail || '預測失敗');
+        // 轉換為統一的多模型格式
+        setResult({
+          mode: 'single',
+          models_summary: [{
+            model_id: json.model_id,
+            model_type: json.model_type,
+            status: 'ok',
+            total_predicted_eac: json.total_predicted_eac,
+            avg_error_pct: json.avg_error_pct,
+          }],
+          total_rows: json.total_rows,
+          columns: json.columns,
+          rows: json.rows,
+        });
+      } else {
+        formData.append('model_ids', selectedModelIds.join(','));
+        const res = await fetch('http://127.0.0.1:8000/train/predict-file-multi', {
+          method: 'POST',
+          body: formData,
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json?.detail || '預測失敗');
+        setResult({ mode: 'multi', ...json });
+      }
       setPage(0);
     } catch (e) {
       setError(e.message || '預測過程發生錯誤');
@@ -127,11 +162,24 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
   const rows = result?.rows || [];
   const totalPages = Math.ceil(rows.length / PAGE_SIZE);
   const pagedRows = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-
-  // Columns to display (original columns + predicted_EAC + error_pct)
   const displayCols = result ? result.columns : [];
-  // Highlight these columns
-  const highlightCols = new Set(['EAC', 'predicted_EAC', 'error_pct']);
+
+  // Build color map for selected models (for multi-model mode)
+  const okModels = (result?.models_summary || []).filter(m => m.status === 'ok');
+  const modelColorMap = {};
+  okModels.forEach((m, i) => {
+    modelColorMap[m.model_id] = MODEL_COLORS[i % MODEL_COLORS.length];
+  });
+
+  // Detect which columns are prediction/error columns
+  const isPredCol = (col) => col.startsWith('pred_') || col === 'predicted_EAC';
+  const isErrCol = (col) => col.startsWith('err_') || col === 'error_pct';
+
+  // Get model info from column name like "pred_XGBoost_5"
+  const getModelIdFromCol = (col) => {
+    const parts = col.split('_');
+    return parts.length >= 3 ? parseInt(parts[parts.length - 1]) : null;
+  };
 
   return (
     <div className="min-h-screen w-full bg-background-dark text-white flex flex-col font-sans">
@@ -165,30 +213,64 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
                 </div>
               </div>
 
-              {/* 2. Model Select */}
+              {/* 2. Multi-Model Select */}
               <div>
-                <label className="text-[11px] text-white/30 mb-2 block font-bold uppercase tracking-widest">2. 選擇訓練模型</label>
-                <select
-                  value={selectedModelId}
-                  onChange={(e) => setSelectedModelId(e.target.value)}
-                  className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-xs text-white focus:ring-2 focus:ring-primary/50 outline-none appearance-none cursor-pointer"
-                >
-                  <option value="">請選擇模型...</option>
-                  {trainedModels.map(m => (
-                    <option key={m.model_id} value={m.model_id}>
-                      #{m.model_id} {m.model_type} — {m.trained_at ? m.trained_at.slice(0, 16).replace('T', ' ') : ''}
-                    </option>
-                  ))}
-                </select>
+                <label className="text-[11px] text-white/30 mb-2 block font-bold uppercase tracking-widest">
+                  2. 選擇訓練模型
+                  <span className="ml-2 text-primary/60 normal-case">（可多選比對）</span>
+                </label>
+                <div className="max-h-[280px] overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+                  {trainedModels.length === 0 && (
+                    <p className="text-[10px] text-white/20 italic py-4 text-center">尚無可用模型</p>
+                  )}
+                  {trainedModels.map(m => {
+                    const isSelected = selectedModelIds.includes(String(m.model_id));
+                    return (
+                      <label
+                        key={m.model_id}
+                        className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all border ${
+                          isSelected
+                            ? 'bg-primary/10 border-primary/30 shadow-[0_0_12px_rgba(242,204,13,0.08)]'
+                            : 'border-white/5 hover:bg-white/[0.03] hover:border-white/10'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleModel(m.model_id)}
+                          className="accent-primary size-3.5 rounded"
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-black px-1.5 py-0.5 rounded ${
+                              isSelected ? 'bg-primary/20 text-primary' : 'bg-white/5 text-white/50'
+                            }`}>
+                              {m.model_type}
+                            </span>
+                            <span className="text-[10px] text-white/30 font-mono">#{m.model_id}</span>
+                          </div>
+                          <p className="text-[9px] text-white/20 mt-0.5 truncate">
+                            {m.site_name} · {m.trained_at ? m.trained_at.slice(0, 16).replace('T', ' ') : ''}
+                          </p>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                {selectedModelIds.length > 0 && (
+                  <p className="text-[10px] text-primary/60 mt-2 font-bold">
+                    已選 {selectedModelIds.length} 個模型
+                  </p>
+                )}
               </div>
             </div>
 
             <button
               onClick={handlePredict}
-              disabled={isPredicting || !file || !selectedModelId}
+              disabled={isPredicting || !file || selectedModelIds.length === 0}
               className="w-full bg-primary text-background-dark py-4 rounded-2xl font-black text-sm hover:scale-[1.02] active:scale-95 transition-all shadow-[0_10px_30px_rgba(242,204,13,0.2)] mt-6 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
             >
-              {isPredicting ? '運算執行中...' : '開始執行預測'}
+              {isPredicting ? '運算執行中...' : selectedModelIds.length > 1 ? `比對預測 (${selectedModelIds.length} 個模型)` : '開始執行預測'}
             </button>
 
             {error && (
@@ -198,26 +280,40 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
             )}
           </section>
 
-          {/* Summary cards — only show after result */}
+          {/* Summary cards — show per-model comparison */}
           {result && (
-            <section className="space-y-4 animate-fade-in">
-              <div className="grid grid-cols-1 gap-4">
-                <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
-                  <p className="text-[10px] text-white/40 uppercase font-bold mb-2 tracking-widest">預估發電總量</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-black font-mono text-white">{result.total_predicted_eac?.toLocaleString() ?? '—'}</span>
-                    <span className="text-xs text-primary font-bold">kWh</span>
+            <section className="space-y-3 animate-fade-in">
+              {okModels.map((m, i) => {
+                const c = MODEL_COLORS[i % MODEL_COLORS.length];
+                return (
+                  <div key={m.model_id} className={`${c.bg} border ${c.border} p-4 rounded-2xl`}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className={`size-2.5 rounded-full ${c.dot}`} />
+                      <span className={`text-xs font-black ${c.text}`}>{m.model_type}</span>
+                      <span className="text-[9px] text-white/30 font-mono">#{m.model_id}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-[9px] text-white/30 font-bold uppercase tracking-widest mb-1">預估發電量</p>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-lg font-black font-mono text-white">{m.total_predicted_eac?.toLocaleString() ?? '—'}</span>
+                          <span className={`text-[10px] font-bold ${c.text}`}>kWh</span>
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-[9px] text-white/30 font-bold uppercase tracking-widest mb-1">平均誤差</p>
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-lg font-black font-mono text-white">{m.avg_error_pct !== null && m.avg_error_pct !== undefined ? m.avg_error_pct.toFixed(2) : '—'}</span>
+                          <span className={`text-[10px] font-bold ${c.text}`}>%</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 pt-3 border-t border-white/5">
+                      <OverallStatus avgError={m.avg_error_pct} />
+                    </div>
                   </div>
-                </div>
-                <div className="bg-white/5 border border-white/10 p-5 rounded-2xl">
-                  <p className="text-[10px] text-white/40 uppercase font-bold mb-2 tracking-widest">平均誤差</p>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-2xl font-black font-mono text-white">{result.avg_error_pct !== null ? result.avg_error_pct.toFixed(2) : '—'}</span>
-                    <span className="text-xs text-primary font-bold">%</span>
-                  </div>
-                </div>
-                <OverallStatus avgError={result.avg_error_pct} />
-              </div>
+                );
+              })}
             </section>
           )}
         </div>
@@ -233,9 +329,25 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
                     <span className="material-symbols-outlined !text-base text-primary">table_chart</span>
                     預測結果 <span className="text-white/30 font-normal ml-2">共 {result.total_rows} 筆</span>
                   </h2>
-                  <div className="text-[10px] text-white/30">
-                    模型：<span className="text-primary font-bold">{result.model_type}</span>
-                  </div>
+                  {/* Model legend for multi-mode */}
+                  {okModels.length > 1 && (
+                    <div className="flex items-center gap-3">
+                      {okModels.map((m, i) => {
+                        const c = MODEL_COLORS[i % MODEL_COLORS.length];
+                        return (
+                          <span key={m.model_id} className="flex items-center gap-1.5">
+                            <span className={`size-2 rounded-full ${c.dot}`} />
+                            <span className={`text-[10px] font-bold ${c.text}`}>{m.model_type}#{m.model_id}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {okModels.length === 1 && (
+                    <div className="text-[10px] text-white/30">
+                      模型：<span className="text-primary font-bold">{okModels[0].model_type}</span>
+                    </div>
+                  )}
                 </div>
 
                 {/* Table */}
@@ -244,39 +356,73 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
                     <thead className="bg-white/5 text-white/40 uppercase sticky top-0 z-10">
                       <tr>
                         <th className="px-3 py-2.5 font-bold">#</th>
-                        {displayCols.map(col => (
-                          <th key={col} className={`px-3 py-2.5 font-bold ${highlightCols.has(col) ? 'text-primary' : ''}`}>
-                            {col}
-                          </th>
-                        ))}
-                        <th className="px-3 py-2.5 font-bold text-primary">燈號</th>
+                        {displayCols.map(col => {
+                          const mid = getModelIdFromCol(col);
+                          const c = mid !== null && modelColorMap[mid] ? modelColorMap[mid] : null;
+                          const isHighlight = isPredCol(col) || isErrCol(col) || col === 'EAC';
+                          // Clean column label
+                          let label = col;
+                          if (col === 'predicted_EAC') label = '預測 EAC';
+                          else if (col === 'error_pct') label = '誤差%';
+                          else if (col.startsWith('pred_')) {
+                            const parts = col.replace('pred_', '').split('_');
+                            label = `預測 ${parts.slice(0, -1).join('_')}`;
+                          } else if (col.startsWith('err_')) {
+                            const parts = col.replace('err_', '').split('_');
+                            label = `誤差% ${parts.slice(0, -1).join('_')}`;
+                          }
+                          return (
+                            <th key={col} className={`px-3 py-2.5 font-bold ${isHighlight ? (c ? c.text : 'text-primary') : ''}`}>
+                              {label}
+                            </th>
+                          );
+                        })}
+                        {/* 單模型時顯示燈號欄 */}
+                        {result.mode === 'single' && <th className="px-3 py-2.5 font-bold text-primary">燈號</th>}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5 font-mono text-white/70">
                       {pagedRows.map((row, idx) => {
                         const globalIdx = page * PAGE_SIZE + idx;
-                        const errPct = row.error_pct;
-                        const rowBg = errPct !== null && errPct !== undefined
-                          ? (errPct > 15 ? 'bg-red-500/[0.03]' : errPct > 5 ? 'bg-yellow-500/[0.02]' : '')
+                        // For single mode, use original error_pct for row coloring
+                        const singleErrPct = result.mode === 'single' ? row.error_pct : null;
+                        const rowBg = singleErrPct !== null && singleErrPct !== undefined
+                          ? (singleErrPct > 15 ? 'bg-red-500/[0.03]' : singleErrPct > 5 ? 'bg-yellow-500/[0.02]' : '')
                           : '';
                         return (
                           <tr key={globalIdx} className={`hover:bg-white/[0.03] transition-colors ${rowBg}`}>
                             <td className="px-3 py-2 text-white/20">{globalIdx + 1}</td>
                             {displayCols.map(col => {
                               const val = row[col];
+                              const mid = getModelIdFromCol(col);
+                              const c = mid !== null && modelColorMap[mid] ? modelColorMap[mid] : null;
+
                               let cellClass = 'px-3 py-2';
-                              if (col === 'predicted_EAC') cellClass += ' text-primary font-bold';
+                              if (isPredCol(col)) cellClass += ` font-bold ${c ? c.text : 'text-primary'}`;
                               else if (col === 'EAC') cellClass += ' text-blue-400';
-                              else if (col === 'error_pct') cellClass += ' hidden'; // shown in light column
+                              else if (isErrCol(col)) {
+                                // Show as error light in multi mode
+                                if (result.mode === 'multi') {
+                                  return (
+                                    <td key={col} className="px-3 py-2">
+                                      <ErrorLight pct={val} />
+                                    </td>
+                                  );
+                                }
+                                cellClass += ' hidden'; // single mode: hidden, shown in light column
+                              }
+
                               return (
                                 <td key={col} className={cellClass}>
                                   {val === null || val === undefined ? '—' : typeof val === 'number' ? Number(val).toFixed(4) : String(val)}
                                 </td>
                               );
                             })}
-                            <td className="px-3 py-2">
-                              <ErrorLight pct={errPct} />
-                            </td>
+                            {result.mode === 'single' && (
+                              <td className="px-3 py-2">
+                                <ErrorLight pct={row.error_pct} />
+                              </td>
+                            )}
                           </tr>
                         );
                       })}
@@ -329,6 +475,7 @@ export default function PredictSolar({ onBack, onNavigateToDashboard, onLogout, 
                   <span className="material-symbols-outlined !text-4xl text-white/10">query_stats</span>
                 </div>
                 <p className="text-sm font-bold text-white/20 tracking-widest uppercase">上傳資料並選擇模型後即可開始預測</p>
+                <p className="text-[10px] text-white/10">可選擇多個模型進行比對分析</p>
               </div>
             )}
           </div>
